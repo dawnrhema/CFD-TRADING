@@ -1,0 +1,69 @@
+// @version=6
+indicator("US Bank Holiday Tracker (5-Day Sync)", overlay=true, max_labels_count=500)
+
+// --- Holiday Logic ---
+get_nth_weekday(y, m, wd, n) =>
+    first_day = dayofweek(timestamp(y, m, 1, 0, 0))
+    1 + (wd - first_day + 7) % 7 + (n - 1) * 7
+
+get_last_monday_may(y) =>
+    31 - (dayofweek(timestamp(y, 5, 31, 0, 0)) - 2 + 7) % 7
+
+is_holiday_date(y, m, d) =>
+    dow = dayofweek(timestamp(y, m, d, 0, 0))
+    nyd = (m == 1 and d == 1) or (m == 12 and d == 31 and dow == 6) or (m == 1 and d == 2 and dow == 2)
+    ind = (m == 7 and d == 4) or (m == 7 and d == 3 and dow == 6) or (m == 7 and d == 5 and dow == 1)
+    vet = (m == 11 and d == 11) or (m == 11 and d == 10 and dow == 6) or (m == 11 and d == 12 and dow == 1)
+    chr = (m == 12 and d == 25) or (m == 12 and d == 24 and dow == 6) or (m == 12 and d == 26 and dow == 1)
+    mlk = (m == 1 and d == get_nth_weekday(y, 1, 2, 3))
+    pres = (m == 2 and d == get_nth_weekday(y, 2, 2, 3))
+    mem = (m == 5 and d == get_last_monday_may(y))
+    lab = (m == 9 and d == get_nth_weekday(y, 9, 2, 1))
+    col = (m == 10 and d == get_nth_weekday(y, 10, 2, 2))
+    tha = (m == 11 and d == get_nth_weekday(y, 11, 5, 4))
+    nyd or mlk or pres or mem or ind or lab or col or vet or tha or chr
+
+// --- Alert Logic with 5-Day Cooldown ---
+var int last_alert_time = 0
+int five_days_ms = 5 * 86400000
+
+bool holiday_found = false
+for i = 1 to 5
+    int check_time = time + (i * 86400000)
+    if is_holiday_date(year(check_time), month(check_time), dayofmonth(check_time))
+        holiday_found := true
+        break
+
+bool trigger_alert = holiday_found and (time - last_alert_time >= five_days_ms)
+if trigger_alert
+    last_alert_time := time
+
+alertcondition(trigger_alert, title="Bank Holiday 5-Day Alert", message="A US Bank Holiday is approaching within the next 5 days.")
+
+// --- Visualization ---
+is_bh = is_holiday_date(year(time), month(time), dayofmonth(time))
+bgcolor(is_bh ? color.new(color.blue, 85) : na)
+
+if is_bh and barstate.isconfirmed
+    label.new(bar_index, high, text="B\nA\nN\nK\n\nH\nO\nL\n\nI\nD\nA\nY", 
+              color=color.new(color.white, 100), textcolor=color.blue, 
+              style=label.style_label_down, yloc=yloc.abovebar)
+
+// --- Future Holiday Table ---
+// Changed background to light gray (color.silver) to contrast with black text
+var table holiday_table = table.new(position.top_right, 1, 6, bgcolor=color.silver, border_width=1)
+
+if barstate.islast
+    // Changed text_color to color.black
+    table.cell(holiday_table, 0, 0, "Upcoming Holidays", text_color=color.black, text_size=size.small)
+    
+    int row = 1
+    int found = 0
+    for i = 1 to 365
+        int future_time = time + (i * 86400000)
+        if is_holiday_date(year(future_time), month(future_time), dayofmonth(future_time))
+            table.cell(holiday_table, 0, row, str.format("{0,date,dd-MM-yyyy}", future_time), text_color=color.black, text_size=size.small)
+            row += 1
+            found += 1
+        if found >= 5 or row >= 6
+            break

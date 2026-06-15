@@ -1,0 +1,174 @@
+//@version=6
+indicator("Symmetrical Channels)", overlay=true, max_boxes_count=500, max_lines_count=500)
+
+// --- Dynamic Settings Inputs ---
+int min_len         = input.int(200, "Minimum Channel Length", minval=10, tooltip="Minimum bars required to form a valid channel.")
+int max_len         = input.int(1000, "Maximum Channel Length", minval=20, tooltip="Maximum bars allowed for a single channel structure.")
+int step_len        = input.int(50, "Length Scan Step", minval=5, tooltip="Increments for the lookback scanning window.")
+color col_upper     = input.color(color.lime, "Upper Boundary")
+color col_mid       = input.color(color.gray, "Midline")
+color col_lower     = input.color(color.red, "Lower Boundary")
+
+// --- Custom Types ---
+type Channel
+    int start_bar
+    int end_bar
+    float slope
+    float intercept
+    float max_dev
+    float score
+
+// --- Core Logic (Executed only on the last historical bar) ---
+if barstate.islast
+
+    int auto_lookback = math.min(bar_index, 1500) 
+    Channel[] candidate_channels = array.new<Channel>()
+    int total_bars = math.min(auto_lookback, bar_index)
+    
+    // 1. Scan historical windows
+    for end_idx = 0 to total_bars - min_len by step_len
+        int max_possible_len = math.min(max_len, total_bars - end_idx)
+        if max_possible_len < min_len
+            continue
+            
+        for len = min_len to max_possible_len by step_len
+            int start_idx = end_idx + len
+            int start_bar = bar_index - start_idx
+            int end_bar   = bar_index - end_idx
+            
+            // --- Ultra-Precision Step 1: Find the raw directional vector of the trend ---
+            float sum_x  = 0.0
+            float sum_y  = 0.0
+            float sum_xy = 0.0
+            float sum_xx = 0.0
+            
+            for i = end_idx to start_idx
+                float body_mid = (open[i] + close[i]) * 0.5
+                int x   = bar_index - i
+                sum_x  += x
+                sum_y  += body_mid
+                sum_xy += x * body_mid
+                sum_xx += x * x
+                
+            float n = len + 1
+            float denominator = (n * sum_xx - sum_x * sum_x)
+            if denominator == 0
+                continue
+                
+            float base_slope = (n * sum_xy - sum_x * sum_y) / denominator
+            
+            // --- Ultra-Precision Step 2: Absolute Body Containment Calculation ---
+            // Instead of using standard deviation, we find the absolute peak adjustments 
+            // required to trap 100% of the candle bodies at this trend angle.
+            float highest_upper_intercept = -999999.0
+            float lowest_lower_intercept  = 999999.0
+            
+            for i = end_idx to start_idx
+                int x = bar_index - i
+                float body_top = math.max(open[i], close[i])
+                float body_bot = math.min(open[i], close[i])
+                
+                // Project the intercept back to baseline for every single body edge
+                float upper_intercept_projected = body_top - (base_slope * x)
+                float lower_intercept_projected = body_bot - (base_slope * x)
+                
+                if upper_intercept_projected > highest_upper_intercept
+                    highest_upper_intercept := upper_intercept_projected
+                if lower_intercept_projected < lowest_lower_intercept
+                    lowest_lower_intercept := lower_intercept_projected
+            
+            // --- Ultra-Precision Step 3: Enforce Pure Symmetrical Midline ---
+            // Calculate the true mathematical center between the tightest outer walls
+            float channel_height = highest_upper_intercept - lowest_lower_intercept
+            if channel_height <= 0
+                continue
+                
+            float final_intercept = (highest_upper_intercept + lowest_lower_intercept) * 0.5
+            float max_dev = channel_height * 0.5
+            
+            // --- Ultra-Precision Step 4: Scoring via Touch-Count Density ---
+            // Channels with high score must have bodies tightly touching or pressing against the limits
+            int body_touches = 0
+            float tolerance = max_dev * 0.05 // 5% buffer zone to define a structural "touch"
+            
+            for i = end_idx to start_idx
+                int x = bar_index - i
+                float y_center = base_slope * x + final_intercept
+                float body_top = math.max(open[i], close[i])
+                float body_bot = math.min(open[i], close[i])
+                
+                if math.abs(body_top - (y_center + max_dev)) <= tolerance
+                    body_touches += 1
+                if math.abs(body_bot - (y_center - max_dev)) <= tolerance
+                    body_touches += 1
+            
+            // The score rewards longer channels with maximum structural touches and tight height dimensions
+            float final_score = (body_touches * len) / channel_height
+            
+            if final_score > 0
+                array.push(candidate_channels, Channel.new(start_bar, end_bar, base_slope, final_intercept, max_dev, final_score))
+
+    // 2. Sort candidate channels by score descending using an optimized bubble sort
+    int num_candidates = array.size(candidate_channels)
+    if num_candidates > 1
+        for i = 0 to math.min(num_candidates - 1, 200)
+            for j = i + 1 to math.min(num_candidates - 1, 201)
+                Channel ch_i = array.get(candidate_channels, i)
+                Channel ch_j = array.get(candidate_channels, j)
+                if ch_j.score > ch_i.score
+                    array.set(candidate_channels, i, ch_j)
+                    array.set(candidate_channels, j, ch_i)
+
+    // 3. Filter out overlapping ranges (Greedy Range Isolation)
+    bool[] bar_claimed = array.new_bool(bar_index + 1, false)
+    Channel[] ruling_channels = array.new<Channel>()
+    
+    for i = 0 to num_candidates - 1
+        Channel cand = array.get(candidate_channels, i)
+        
+        bool has_overlap = false
+        for b = cand.start_bar to cand.end_bar
+            if array.get(bar_claimed, b)
+                has_overlap := true
+                break
+                
+        if not has_overlap
+            array.push(ruling_channels, cand)
+            for b = cand.start_bar to cand.end_bar
+                array.set(bar_claimed, b, true)
+
+    // 4. Render ruling channels
+    for i = 0 to array.size(ruling_channels) - 1
+        Channel rc = array.get(ruling_channels, i)
+        
+        float start_mid = rc.slope * rc.start_bar + rc.intercept
+        float end_mid   = rc.slope * rc.end_bar + rc.intercept
+        
+        // Midline
+        line.new(
+             x1=rc.start_bar, y1=start_mid, 
+             x2=rc.end_bar, y2=end_mid, 
+             xloc=xloc.bar_index, color=col_mid, width=1, style=line.style_dashed
+             )
+             
+        // Upper Wall (Zero-margin lock onto highest outer candle body)
+        line.new(
+             x1=rc.start_bar, y1=start_mid + rc.max_dev, 
+             x2=rc.end_bar, y2=end_mid + rc.max_dev, 
+             xloc=xloc.bar_index, color=col_upper, width=2, style=line.style_solid
+             )
+             
+        // Lower Wall (Zero-margin lock onto lowest outer candle body)
+        line.new(
+             x1=rc.start_bar, y1=start_mid - rc.max_dev, 
+             x2=rc.end_bar, y2=end_mid - rc.max_dev, 
+             xloc=xloc.bar_index, color=col_lower, width=2, style=line.style_solid
+             )
+             
+        // Background Fill
+        box.new(
+             left=rc.start_bar, top=start_mid + rc.max_dev, 
+             right=rc.end_bar, bottom=end_mid - rc.max_dev, 
+             bgcolor=color.new(col_mid, 93),
+             border_color=color.new(color.white, 100)
+             )

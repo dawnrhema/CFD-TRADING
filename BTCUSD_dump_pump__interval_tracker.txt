@@ -1,0 +1,103 @@
+//@version=6
+indicator("Bitcoin 1064-Day Cycle Architecture [Locked]", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+// ==========================================
+// CONFIGURATION & INPUTS
+// ==========================================
+var string G_CYCLE = "Cycle Parameters"
+int expansionDays  = input.int(1064, title="Expansion Phase (Days)", minval=1, group=G_CYCLE)
+int contractionDays = input.int(364, title="Contraction Phase (Days)", minval=1, group=G_CYCLE)
+
+var string G_COLORS = "Style Configuration"
+color c_expansion   = input.color(color.new(#00ff88, 88), title="Expansion Zone Color", group=G_COLORS)
+color c_contraction = input.color(color.new(#ff3355, 88), title="Contraction Zone Color", group=G_COLORS)
+color c_line        = input.color(color.new(color.white, 60), title="Boundary Lines", group=G_COLORS)
+
+// Fixed Historical Macro Bottoms (GMT Safe)
+var int bottom2015 = timestamp("GMT", 2015, 01, 14, 00, 00, 00)
+var int bottom2018 = timestamp("GMT", 2018, 12, 15, 00, 00, 00)
+var int bottom2022 = timestamp("GMT", 2022, 11, 21, 00, 00, 00)
+
+// Convert Days to Milliseconds
+int expMs  = expansionDays * 24 * 60 * 60 * 1000
+int contMs = contractionDays * 24 * 60 * 60 * 1000
+int totalCycleMs = expMs + contMs
+
+// Track historical highs and lows dynamically to scale background boxes
+var float macroHigh = 0.0
+var float macroLow = 1000000.0
+macroHigh := math.max(high, macroHigh)
+macroLow := math.min(low, macroLow)
+
+// ==========================================
+// GRAPHICS RENDERING FUNCTION
+// ==========================================
+drawCycleZone(int anchorBottom, int cycleNum, float boxTop, float boxBottom) =>
+    int currentPeakTime   = anchorBottom + expMs
+    int currentBottomTime = currentPeakTime + contMs
+    
+    // Draw Boundary Lines (using explicit heights instead of infinite extensions to prevent scale distortion)
+    line.new(x1=anchorBottom, y1=boxBottom, x2=anchorBottom, y2=boxTop, xloc=xloc.bar_time, color=c_line, style=line.style_dashed, width=1)
+    line.new(x1=currentPeakTime, y1=boxBottom, x2=currentPeakTime, y2=boxTop, xloc=xloc.bar_time, color=c_line, style=line.style_dashed, width=1)
+    
+    // Create Shaded Background Boxes bound directly to the historical price ceiling/floor
+    box.new(left=anchorBottom, top=boxTop, right=currentPeakTime, bottom=boxBottom, xloc=xloc.bar_time, bgcolor=c_expansion, border_color=color.new(color.white, 100))
+    box.new(left=currentPeakTime, top=boxTop, right=currentBottomTime, bottom=boxBottom, xloc=xloc.bar_time, bgcolor=c_contraction, border_color=color.new(color.white, 100))
+    
+    // Phase Labels positioned cleanly right over the box boundaries
+    label.new(x=int(math.avg(anchorBottom, currentPeakTime)), y=boxTop, text="CYCLE " + str.tostring(cycleNum) + "\nEXPANSION", xloc=xloc.bar_time, color=color.new(color.black, 100), textcolor=color.new(#00ff88, 0), style=label.style_label_down, size=size.small)
+    label.new(x=int(math.avg(currentPeakTime, currentBottomTime)), y=boxTop, text="CYCLE " + str.tostring(cycleNum) + "\nCONTRACTION", xloc=xloc.bar_time, color=color.new(color.black, 100), textcolor=color.new(#ff3355, 0), style=label.style_label_down, size=size.small)
+
+// ==========================================
+// EXECUTION & VISUALIZATION LOOP
+// ==========================================
+if barstate.islast
+    // Use an expanded cushion multiplier based on the highest historical point so future zones fit comfortably
+    float visualTop = macroHigh * 1.25
+    float visualBottom = macroLow * 0.75
+
+    // Cycle 2: 2015 to 2018
+    drawCycleZone(bottom2015, 2, visualTop, visualBottom)
+    
+    // Cycle 3: 2018 to 2022
+    drawCycleZone(bottom2018, 3, visualTop, visualBottom)
+    
+    // Cycle 4: 2022 to 2026
+    drawCycleZone(bottom2022, 4, visualTop, visualBottom)
+    
+    // Cycle 5 (Future Projection ahead of ticker)
+    int bottom2026 = bottom2022 + totalCycleMs
+    drawCycleZone(bottom2026, 5, visualTop, visualBottom)
+
+// ==========================================
+// REAL-TIME METRICS DATA WINDOW PANEL
+// ==========================================
+var table infoTable = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+if barstate.islast
+    int elapsedMs = time - bottom2022
+    float totalDaysElapsed = elapsedMs / (24 * 60 * 60 * 1000)
+    
+    string currentPhase = ""
+    color phaseColor = color.white
+    float phaseProgress = 0.0
+    
+    if elapsedMs <= expMs
+        currentPhase := "Expansion"
+        phaseColor := #00ff88
+        phaseProgress := (elapsedMs / float(expMs)) * 100
+    else
+        currentPhase := "Contraction"
+        phaseColor := #ff3355
+        phaseProgress := ((elapsedMs - expMs) / float(contMs)) * 100
+
+    table.cell(infoTable, 0, 0, "Macro Regime Matrix", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "Value / Status", bgcolor=color.new(color.gray, 50), text_color=color.white, text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "Cycle 4 Phase:", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, currentPhase, text_color=phaseColor, text_size=size.small)
+    
+    table.cell(infoTable, 0, 2, "Phase Progress:", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(phaseProgress, "#.##") + "%", text_color=phaseColor, text_size=size.small)
+    
+    table.cell(infoTable, 0, 3, "Total Days from Base:", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, str.tostring(totalDaysElapsed, "#") + " Days", text_color=color.white, text_size=size.small)

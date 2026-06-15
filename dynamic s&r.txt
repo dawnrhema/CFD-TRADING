@@ -1,0 +1,73 @@
+//@version=6
+indicator("Dynamic Support & Resistance (1-Year History)", overlay=true, max_lines_count=500)
+
+// --- Inputs ---
+int pivotLen      = input.int(10, title="Pivot Period (Left/Right Bars)", minval=2)
+int maxLines      = input.int(250, title="Max Active Lines Each (S/R)", minval=1, maxval=250) // 250 S + 250 R = 500 total max
+float proximityPct = input.float(0.5, title="Proximity Threshold (%)", minval=0.0, step=0.1, 
+     tooltip="If a new pivot is within this % of an existing line, it's considered the same zone/fakeout and won't create a duplicate line.")
+
+// --- Hardcoded Styling Parameters ---
+color lineStyleColor = color.black
+int lineStyleWidth   = 1
+
+// --- Arrays to track lines ---
+var line[] resistanceLines = array.new<line>()
+var line[] supportLines    = array.new<line>()
+
+// --- Helper function to check for nearby existing lines ---
+is_near_existing_line(float price, line[] lineArray, float threshold) =>
+    bool near = false
+    if array.size(lineArray) > 0
+        for i = 0 to array.size(lineArray) - 1
+            float linePrice = line.get_y1(array.get(lineArray, i))
+            if math.abs(price - linePrice) / linePrice * 100 <= threshold
+                near := true
+                break
+    near
+
+// --- Helper function to update line lengths and clear broken lines ---
+// This ensures old lines don't clutter the 500-line buffer limit prematurely
+manage_line_extensions(line[] lineArray) =>
+    if array.size(lineArray) > 0
+        for i = array.size(lineArray) - 1 to 0
+            line currentLine = array.get(lineArray, i)
+            // Update the right-side of the line to the current bar
+            line.set_x2(currentLine, bar_index)
+
+// --- Pivot Calculation ---
+float pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+float pivotLow  = ta.pivotlow(low, pivotLen, pivotLen)
+
+// --- Manage Resistance (Pivots High) ---
+if not na(pivotHigh)
+    if not is_near_existing_line(pivotHigh, resistanceLines, proximityPct)
+        // Draw line from the pivot bar to the current bar (instead of infinite extension)
+        line newLine = line.new(
+             x1=bar_index - pivotLen, y1=pivotHigh, 
+             x2=bar_index, y2=pivotHigh, 
+             extend=extend.none, color=lineStyleColor, width=lineStyleWidth
+             )
+        array.push(resistanceLines, newLine)
+        
+        if array.size(resistanceLines) > maxLines
+            line.delete(array.shift(resistanceLines))
+
+// --- Manage Support (Pivots Low) ---
+if not na(pivotLow)
+    if not is_near_existing_line(pivotLow, supportLines, proximityPct)
+        // Draw line from the pivot bar to the current bar
+        line newLine = line.new(
+             x1=bar_index - pivotLen, y1=pivotLow, 
+             x2=bar_index, y2=pivotLow, 
+             extend=extend.none, color=lineStyleColor, width=lineStyleWidth
+             )
+        array.push(supportLines, newLine)
+        
+        if array.size(supportLines) > maxLines
+            line.delete(array.shift(supportLines))
+
+// --- Dynamic Extension Update ---
+// Real-time update to pull all active historical lines forward to the current bar
+manage_line_extensions(resistanceLines)
+manage_line_extensions(supportLines)
