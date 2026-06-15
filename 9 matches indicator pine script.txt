@@ -1,0 +1,213 @@
+//@version=6
+indicator("3-Year 9-Match 40-Step Single Path Consensus Projector v6.2 - Zero Proof Edition", overlay=true, max_lines_count=500)
+
+// Settings
+float stepScale           = input.float(1.0, title="Step Size Scale Multiplier")
+bool separateLines         = input.bool(true, title="Slightly Offset Overlapping Lines?")
+bool showHistoricalPaths   = input.bool(true, title="Show Individual Historical Paths? (Black Lines)")
+
+// Calculate ATR to handle the vertical scaling automatically based on the asset price
+float chartAtr = ta.atr(14)
+
+// ==========================================
+// 1. DYNAMIC VISUAL CALCULATORS FOR HISTORICAL LINES
+// ==========================================
+getThicknessForMatch(int matchNum) =>
+    switch matchNum
+        1 => 4
+        2 => 3
+        3 => 3
+        4 => 2
+        5 => 2
+        6 => 1
+        7 => 1
+        8 => 1
+        9 => 1
+        => 1
+
+getTransparencyForMatch(int matchNum) =>
+    switch matchNum
+        1 => 10
+        2 => 20
+        3 => 30
+        4 => 45
+        5 => 60
+        6 => 70
+        7 => 75
+        8 => 80
+        9 => 85
+        => 0
+
+// ==========================================
+// 2. CAPTURE LATEST 9 CLOSED CANDLES
+// ==========================================
+var string currentPattern = ""
+
+if barstate.islast
+    currentPattern := ""
+    for i = 9 to 1
+        // Explicitly check for flat candle state (Close == Open) as "Z" (Zero)
+        string candleColor = close[i] > open[i] ? "G" : (close[i] < open[i] ? "R" : "Z")
+        currentPattern += candleColor
+
+// ==========================================
+// 3. HISTORICAL SCANNING & PROJECTION GRID
+// ==========================================
+var array<line> chartLines = array.new<line>(0)
+var array<label> MarkerLabels = array.new<label>(0)
+
+if barstate.islast
+    // Clear previous line segments and markers completely
+    if array.size(chartLines) > 0
+        for i = 0 to array.size(chartLines) - 1
+            line.delete(array.get(chartLines, i))
+        array.clear(chartLines)
+        
+    if array.size(MarkerLabels) > 0
+        for i = 0 to array.size(MarkerLabels) - 1
+            label.delete(array.get(MarkerLabels, i))
+        array.clear(MarkerLabels)
+
+    int matchCount = 0
+    int threeYearsAgoTime = time - (3 * 365 * 24 * 60 * 60 * 1000)
+    int maxSearchBars = math.min(4950, bar_index - 10)
+    
+    float baseStepSize = not na(chartAtr) ? chartAtr : (close * 0.001)
+    float calculatedStep = baseStepSize * stepScale
+    
+    // Matrix grid to store calculated price paths
+    var matrix<float> priceGrid = matrix.new<float>(9, 41, 0.0)
+    matrix.fill(priceGrid, 0.0)
+
+    // PROOF LOG: Print the target pattern we are looking for
+    log.info("====================================================")
+    log.info("STARTING SCAN: Looking for target pattern: {0}", currentPattern)
+    log.info("====================================================")
+
+    // Scan backwards bar-by-bar
+    for lookback = 42 to maxSearchBars
+        if matchCount >= 9
+            break 
+            
+        if time[lookback] < threeYearsAgoTime
+            break
+    
+        string checkPattern = ""
+        for j = 9 to 1
+            int checkIndex = lookback + j
+            // Explicitly check for flat candle state in historical data
+            string historyColor = close[checkIndex] > open[checkIndex] ? "G" : (close[checkIndex] < open[checkIndex] ? "R" : "Z")
+            checkPattern += historyColor
+            
+        if checkPattern == currentPattern
+            matchCount += 1
+            
+            // PROOF LOG: Fixed with str.format_time to explicitly show human-readable dates/times
+            log.info("MATCH #{0} FOUND! Historical Bar Index: {1}, Time of Bar: {2}", matchCount, bar_index - lookback, str.format_time(time[lookback], "yyyy-MM-dd HH:mm", syminfo.timezone))
+            
+            int dynamicTransp  = getTransparencyForMatch(matchCount)
+            int dynamicWidth   = getThicknessForMatch(matchCount)
+            color segmentColor = color.new(color.black, dynamicTransp)
+            
+            int startX = bar_index
+            float separationOffset = separateLines ? (matchCount - 1) * (calculatedStep * 0.05) : 0
+            float startY = close + separationOffset
+            
+            // Log point 0
+            matrix.set(priceGrid, matchCount - 1, 0, startY)
+            
+            // Track the sequence string for verification
+            string verifyForwardSequence = ""
+            
+            // Plot individual paths
+            for futureIdx = 1 to 40
+                int absoluteHistoryPointer = lookback - futureIdx + 1
+                if absoluteHistoryPointer < 0
+                    break
+                    
+                // Explicitly check for flat candle state in the forward projection steps
+                string forwardMovement = close[absoluteHistoryPointer] > open[absoluteHistoryPointer] ? "G" : (close[absoluteHistoryPointer] < open[absoluteHistoryPointer] ? "R" : "Z")
+                verifyForwardSequence += forwardMovement 
+                
+                int endX = startX + 1
+                float endY = startY
+                
+                if forwardMovement == "G"
+                    endY += calculatedStep
+                else if forwardMovement == "R"
+                    endY -= calculatedStep
+                else
+                    // forwardMovement is "Z" (Zero / flat)
+                    endY := startY
+                    
+                matrix.set(priceGrid, matchCount - 1, futureIdx, endY)
+               
+                // Draw background fading segment lines (subject to user setting)
+                if showHistoricalPaths
+                    line segment = line.new(x1=startX, y1=startY, x2=endX, y2=endY, xloc=xloc.bar_index, width=dynamicWidth, color=segmentColor)
+                    array.push(chartLines, segment)
+                
+                startX := endX
+                startY := endY
+            
+            // PROOF LOG: Print the actual 40-step combination extracted right after this match
+            log.info("   -> Subsequent 40-Candle Combination Extracted: {0}", verifyForwardSequence)
+
+    // ==========================================
+    // 4. FIND AND DRAW THE MASTER WINNING PATH
+    // ==========================================
+    if matchCount > 0
+        int winningRowIndex = 0
+        int maxGlobalIntersections = -1
+        
+        for rowToTest = 0 to matchCount - 1
+            int testLineIntersections = 0
+            
+            for col = 1 to 40
+                float testPrice = matrix.get(priceGrid, rowToTest, col)
+                
+                for rowToCompare = 0 to matchCount - 1
+                    if rowToTest != rowToCompare
+                        float comparePrice = matrix.get(priceGrid, rowToCompare, col)
+                        if math.abs(testPrice - comparePrice) <= (calculatedStep * 0.12)
+                            testLineIntersections += 1
+                            
+            if testLineIntersections > maxGlobalIntersections
+                maxGlobalIntersections := testLineIntersections
+                winningRowIndex := rowToTest
+               
+        int masterStartX = bar_index
+        float masterStartY = close 
+        float masterEndY = matrix.get(priceGrid, winningRowIndex, 40)
+        
+        // Dynamic structural color assignment (Entire line is Green if rising, Purple if falling)
+        color winningPathColor = masterEndY >= masterStartY ? color.green : color.purple
+        
+        // 1. Mark the Starting Point
+        label startMarker = label.new(x=masterStartX, y=masterStartY, text="START", color=winningPathColor, textcolor=color.white, style=label.style_label_center, size=size.small)
+        array.push(MarkerLabels, startMarker)
+        
+        int currentX = masterStartX
+        float currentY = masterStartY
+        
+        for step = 1 to 40
+            int nextX = currentX + 1
+            float nextY = matrix.get(priceGrid, winningRowIndex, step)
+            
+            line masterSegment = line.new(x1=currentX, y1=currentY, x2=nextX, y2=nextY, xloc=xloc.bar_index, width=5, color=winningPathColor)
+            array.push(chartLines, masterSegment)
+            
+            currentX := nextX
+            currentY := nextY
+            
+        // 2. Mark the Ending Point
+        label endMarker = label.new(x=currentX, y=currentY, text="END", color=winningPathColor, textcolor=color.white, style=label.style_label_center, size=size.small)
+        array.push(MarkerLabels, endMarker)
+
+        // PROOF LOG: Show which match won the consensus engine
+        log.info("====================================================")
+        log.info("CONSENSUS WINNER: Match #{0} won with {1} structural intersections.", winningRowIndex + 1, maxGlobalIntersections)
+        log.info("====================================================")
+
+    // DISPLAY DATA BOARD
+    label.new(bar_index, high, text="Target (Last 9 Closed): " + currentPattern + "\nMatches Found (Past 3Y): " + str.tostring(matchCount) + "/9", color=color.black, textcolor=color.white, style=label.style_label_down)
