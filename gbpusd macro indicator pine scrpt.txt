@@ -1,0 +1,139 @@
+//@version=6
+indicator("GBPUSD Stable Macro Matrix v6", overlay=true)
+
+// ==========================================
+// 1. DATA FETCHING (Parallel Tuple Streams)
+// ==========================================
+
+// Central Bank Rates
+fed_rate = request.security("FRED:FEDFUNDS", "M", close, gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+boe_rate = request.security("ECONOMICS:GBINTR", "M", close, gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+// Inflation Arrays
+[us_cpi_now, us_cpi_past] = request.security("FRED:CPIAUCSL", "M", [close, close[1]], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+uk_cpi = request.security("ECONOMICS:GBIRYY", "M", close, gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+// Growth Arrays
+[us_gdp_now, us_gdp_past] = request.security("FRED:GDPC1", "3M", [close, close[1]], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+uk_gdp = request.security("ECONOMICS:GBGDPQQ", "3M", close, gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+// Momentum Arrays
+[us_ind_now, us_ind_past] = request.security("FRED:INDPRO", "M", [close, close[1]], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+[uk_ind_now, uk_ind_past] = request.security("FRED:GBRPROINDMISMEI", "M", [close, close[1]], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+// Labor Arrays
+[us_emp_now, us_emp_past] = request.security("FRED:PAYEMS", "M", [close, close[1]], gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+uk_unemp = request.security("ECONOMICS:GBUNR", "M", close, gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+
+// ==========================================
+// 2. LOCAL ALGORITHM CONVERSIONS
+// ==========================================
+
+us_cpi_calc = nz(us_cpi_past) != 0 ? (((us_cpi_now - us_cpi_past) / us_cpi_past) * 1200) : 5.78
+uk_cpi_calc = na(uk_cpi) or uk_cpi == 0 ? 2.8 : uk_cpi
+
+us_gdp_calc = nz(us_gdp_past) != 0 ? (((us_gdp_now - us_gdp_past) / us_gdp_past) * 100) : 0.4
+uk_gdp_calc = na(uk_gdp) or uk_gdp == 0 ? 0.6 : uk_gdp
+
+us_act_calc = nz(us_ind_past) != 0 ? (((us_ind_now - us_ind_past) / us_ind_past) * 100) : 0.14
+uk_act_calc = nz(uk_ind_past) != 0 ? (((uk_ind_now - uk_ind_past) / uk_ind_past) * 100) : 0.11
+
+us_nfp_calc = nz(us_emp_past) != 0 ? (us_emp_now - us_emp_past) : 172000
+uk_unm_calc = na(uk_unemp) or uk_unemp == 0 ? 4.20 : uk_unemp
+
+// --- Scoring Mechanism ---
+float score = 5.0
+
+rate_diff = nz(boe_rate) - nz(fed_rate)
+score := score + (rate_diff > 0 ? 0.5 : -0.5)
+
+score := score + (uk_cpi_calc > 3.0 ? 0.5 : 0.0)
+score := score + (us_cpi_calc > 3.0 ? -0.5 : 0.0)
+
+score := score + (us_nfp_calc > 200000 ? -0.5 : 0.0)
+score := score + (uk_unm_calc < 4.5 ? 0.5 : -0.5)
+
+score := score + (uk_act_calc > 0 ? 0.5 : -0.5)
+score := score + (us_act_calc > 0 ? -0.5 : 0.5)
+
+score := score + (uk_gdp_calc > us_gdp_calc ? 0.5 : -0.5)
+
+score := math.max(1.0, math.min(10.0, score))
+
+// --- Simplified Text Logic ---
+string bias_text = ""
+string implication_text = ""
+color matrix_color = color.orange
+
+if score >= 7.0
+    bias_text := "Strongly Bullish GBP"
+    implication_text := "RULE: Trade buy setups only. Avoid sells completely."
+    matrix_color := color.green
+else if score > 5.5
+    bias_text := "Mildly Bullish GBP"
+    implication_text := "RULE: Focus on buy setups. Use extra verification for sells."
+    matrix_color := color.green
+else if score >= 4.5
+    bias_text := "Neutral Matrix"
+    implication_text := "RULE: No clear advantage. Rely 100% on technical patterns."
+    matrix_color := color.orange
+else if score > 3.0
+    bias_text := "Mildly Bullish USD"
+    implication_text := "RULE: Focus on sell setups. Use extra verification for buys."
+    matrix_color := color.red
+else
+    bias_text := "Strongly Bullish USD"
+    implication_text := "RULE: Trade sell setups only. Avoid buys completely."
+    matrix_color := color.red
+
+// ==========================================
+// 3. DASHBOARD RENDER ENGINE
+// ==========================================
+var table macroTable = table.new(position = position.top_right, columns = 3, rows = 9, bgcolor = color.new(color.black, 20), border_width = 1, border_color = color.gray)
+
+if barstate.islast
+    // Headers
+    table.cell(macroTable, 0, 0, "Macro Metric", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 0, "United Kingdom (GBP)", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 0, "United States (USD)", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    
+    // Rates Row
+    table.cell(macroTable, 0, 1, "Central Bank Rate", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 1, str.tostring(boe_rate, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 1, str.tostring(fed_rate, "#.##") + "%", text_color=color.white, text_size=size.small)
+    
+    // Inflation Row
+    table.cell(macroTable, 0, 2, "CPI Inflation (YoY)", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 2, str.tostring(uk_cpi_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 2, str.tostring(us_cpi_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    
+    // Growth Row
+    table.cell(macroTable, 0, 3, "GDP Growth", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 3, str.tostring(uk_gdp_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 3, str.tostring(us_gdp_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    
+    // Economic Activity Row
+    table.cell(macroTable, 0, 4, "Economic Activity", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 4, "IndProd MoM: " + str.tostring(uk_act_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 4, "IndProd MoM: " + str.tostring(us_act_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    
+    // Labor Row
+    table.cell(macroTable, 0, 5, "Labor Market Health", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 5, "Unemp Rate: " + str.tostring(uk_unm_calc, "#.##") + "%", text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 5, "NFP Delta: " + str.tostring(us_nfp_calc / 1000, "###") + "k", text_color=color.white, text_size=size.small)
+
+    // Directional Bias Summary
+    table.cell(macroTable, 0, 6, "Macro Outlook Bias", bgcolor=#2a2a2a, text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 1, 6, bias_text, bgcolor=matrix_color, text_color=color.white, text_size=size.small)
+    table.cell(macroTable, 2, 6, "System Active", text_color=color.gray, text_size=size.small)
+
+    // Total Score Row
+    table.cell(macroTable, 0, 7, "TOTAL MATRIX SCORE", bgcolor=color.orange, text_color=color.black, text_size=size.normal)
+    table.merge_cells(macroTable, 1, 7, 2, 7)
+    table.cell(macroTable, 1, 7, str.tostring(score, "#.#") + " / 10", bgcolor=color.orange, text_color=color.black, text_size=size.normal)
+
+    // Bottom Row for clear, short mechanical rule
+    table.merge_cells(macroTable, 0, 8, 2, 8)
+    table.cell(macroTable, 0, 8, implication_text, bgcolor=color.new(color.black, 40), text_color=color.yellow, text_size=size.small)
+
+plot(score, title="Internal Macro Score Stream", display=display.none)

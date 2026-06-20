@@ -1,0 +1,160 @@
+//@version=6
+indicator("XAUUSD Macro Analysis", overlay=true, precision=2)
+
+// ==========================================
+// 1. DATA FETCHING (Macro & Market Fields)
+// ==========================================
+
+// US 10-Year Real Yield (TIPS) - Using FRED:DFII10
+real_yield = request.security("FRED:DFII10", "D", close, gaps = barmerge.gaps_off)
+
+// US Dollar Index (DXY)
+dxy = request.security("TVC:DXY", "D", close, gaps = barmerge.gaps_off)
+
+// 10-Year Treasury Nominal Yield
+yield_10y = request.security("TVC:US10Y", "D", close, gaps = barmerge.gaps_off)
+
+// Fed Interest Rate Expectations (30-Day Fed Funds Futures from CBOT)
+fed_rate_exp = 100.0 - request.security("CBOT:ZQ1!", "D", close, gaps = barmerge.gaps_off)
+
+// --- Macro Economic Indicators via Direct Full Tickers ---
+cpi      = request.security("ECONOMICS:USIRYY", "M", close, gaps = barmerge.gaps_off)
+core_pce = request.security("ECONOMICS:USCCPI", "M", close, gaps = barmerge.gaps_off)
+
+// Labor Market
+nfp_change   = request.security("ECONOMICS:USNFP", "M", close, gaps = barmerge.gaps_off)
+unemployment = request.security("ECONOMICS:USUR", "M", close, gaps = barmerge.gaps_off)
+
+// Central Bank Gold Purchases
+cb_gold = request.security("ECONOMICS:USGR", "M", close, gaps = barmerge.gaps_off)
+
+// FOMC Momentum
+fomc_shift = ta.change(fed_rate_exp, 20)
+
+// ==========================================
+// 2. SCORING MATRIX & GRADE CALCULATION
+// ==========================================
+
+float bull_points = 0.0
+float max_points  = 0.0
+
+// A. Real Yields Analysis
+max_points += 1.0
+if real_yield < 1.0
+    bull_points += 1.0
+else if real_yield < 2.0
+    bull_points += 0.5
+
+// B. DXY Trend
+max_points += 1.0
+dxy_ma = ta.sma(dxy, 50)
+if dxy < dxy_ma
+    bull_points += 1.0
+
+// C. Inflation Environment
+max_points += 1.0
+if cpi > 3.0 or core_pce > 2.5
+    bull_points += 1.0
+else if cpi > 2.0
+    bull_points += 0.5
+
+// D. Labor Market Strength
+max_points += 1.0
+if unemployment > 4.2 or nfp_change < 100000
+    bull_points += 1.0
+else if unemployment > 3.8
+    bull_points += 0.5
+
+// E. Yield Curve / Nominal Yield Context
+max_points += 1.0
+if ta.change(yield_10y, 10) < 0
+    bull_points += 1.0
+
+// F. Fed Rate Expectations
+max_points += 1.0
+if fomc_shift < 0
+    bull_points += 1.0
+else if fomc_shift == 0
+    bull_points += 0.5
+
+// G. Central Bank Accumulation Trend
+max_points += 1.0
+if ta.change(cb_gold, 3) >= 0
+    bull_points += 1.0
+
+// Calculate Final Score out of 10
+float final_grade = math.round((bull_points / max_points) * 10.0, 1)
+
+// ==========================================
+// 3. COMPACT TRADING ACTION LOGIC
+// ==========================================
+string bias = "NEUTRAL"
+color bias_color = color.orange
+string trade_action = ""
+
+if final_grade >= 7.0
+    bias := "STRONGLY BULLISH"
+    bias_color := color.green
+    trade_action := "ACTION: Hunt BUY setups only. Strong macro tailwinds favor structural longs."
+else if final_grade >= 5.5
+    bias := "MODERATELY BULLISH"
+    bias_color := color.lime
+    trade_action := "ACTION: Favor BUY setups on technical discount. Mild bullish backing."
+else if final_grade >= 4.0
+    bias := "NEUTRAL"
+    bias_color := color.orange
+    trade_action := "ACTION: Look for short-term RANGE/SCALP trades. No macro directional edge."
+else
+    bias := "BEARISH"
+    bias_color := color.red
+    trade_action := "ACTION: Hunt SELL setups only. Macro forces punishing non-yielding assets."
+
+// ==========================================
+// 4. DISPLAY DASHBOARD (UI Rendering)
+// ==========================================
+
+var table macro_table = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 15), border_color=color.gray, border_width=1)
+
+if barstate.islast
+    // Header Style
+    table.cell(macro_table, 0, 0, "MACRO METRIC", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 0, "VALUE / STATE", bgcolor=color.blue, text_color=color.white, text_size=size.small)
+    
+    // Data Rows
+    table.cell(macro_table, 0, 1, "US 10Y Real Yield (TIPS)", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 1, str.tostring(real_yield, "#.##") + "%", text_color=real_yield > 1.5 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 2, "DXY Index", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 2, str.tostring(dxy, "#.##"), text_color=dxy > ta.sma(dxy, 50) ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 3, "Fed Target Expectation", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 3, str.tostring(fed_rate_exp, "#.##") + "%", text_color=fomc_shift > 0 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 4, "US CPI (YoY)", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 4, str.tostring(cpi, "#.##") + "%", text_color=cpi > 2.5 ? color.green : color.orange, text_size=size.small)
+    
+    table.cell(macro_table, 0, 5, "Core CPI Proxy", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 5, str.tostring(core_pce, "#.##") + "%", text_color=core_pce > 2.0 ? color.green : color.orange, text_size=size.small)
+    
+    table.cell(macro_table, 0, 6, "NFP MoM Change", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 6, str.tostring(nfp_change, "#,###"), text_color=nfp_change > 200000 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 7, "Unemployment Rate", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 7, str.tostring(unemployment, "#.##") + "%", text_color=unemployment < 4.0 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 8, "10Y Treasury Nominal", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 8, str.tostring(yield_10y, "#.##") + "%", text_color=ta.change(yield_10y, 5) > 0 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 9, "FOMC Momentum (1M)", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 9, fomc_shift > 0 ? "Hawkish Shift" : "Dovish Shift", text_color=fomc_shift > 0 ? color.red : color.green, text_size=size.small)
+    
+    table.cell(macro_table, 0, 10, "CB Gold Reserves Index", text_color=color.white, text_size=size.small)
+    table.cell(macro_table, 1, 10, str.tostring(cb_gold, "#.##"), text_color=color.green, text_size=size.small)
+    
+    // Total Score Card Metrics
+    table.cell(macro_table, 0, 11, "GOLD MACRO GRADE", bgcolor=bias_color, text_color=color.black, text_size=size.normal, text_font_family=font.family_monospace)
+    table.cell(macro_table, 1, 11, str.tostring(final_grade, "#.#") + " / 10 (" + bias + ")", bgcolor=bias_color, text_color=color.black, text_size=size.normal, text_font_family=font.family_monospace)
+    
+    // Condensed Action Block
+    table.cell(macro_table, 0, 12, trade_action, bgcolor=color.new(color.gray, 85), text_color=color.white, text_size=size.small)
+    table.merge_cells(macro_table, 0, 12, 1, 12)
