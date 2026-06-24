@@ -1,0 +1,65 @@
+//@version=6
+indicator("ICC: CHOCH & BOS", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// --- Internal Parameters ---
+length = 5
+ph = ta.pivothigh(high, length, length)
+pl = ta.pivotlow(low, length, length)
+
+// --- State Variables ---
+var int trend = 1 
+var float swing_h = na
+var int swing_h_x = na
+var float swing_l = na
+var int swing_l_x = na
+
+var float last_choch_price = na
+var int last_choch_x = na
+var bool expect_correction = false
+
+// --- Update Swing Points & Correction Boxes ---
+if not na(ph)
+    swing_h := ph
+    swing_h_x := bar_index[length]
+    // Bullish correction (pullback after a bearish CHOCH)
+    if expect_correction and trend == -1
+        box.new(left=last_choch_x, top=swing_h, right=bar_index[length], bottom=last_choch_price, border_width=0, bgcolor=color.new(color.green, 30), text="Correction", text_size=size.small, text_valign=text.align_top, text_color=color.black)
+        expect_correction := false
+
+if not na(pl)
+    swing_l := pl
+    swing_l_x := bar_index[length]
+    // Bearish correction (pullback after a bullish CHOCH)
+    if expect_correction and trend == 1
+        box.new(left=last_choch_x, top=last_choch_price, right=bar_index[length], bottom=swing_l, border_width=0, bgcolor=color.new(color.green, 30), text="Correction", text_size=size.small, text_valign=text.align_top, text_color=color.black)
+        expect_correction := false
+
+// --- CHOCH & BOS Logic ---
+bullish_cross = ta.crossover(close, swing_h)
+bearish_cross = ta.crossunder(close, swing_l)
+
+if bullish_cross
+    if trend == -1 // Trend changed: CHOCH
+        box.new(left=swing_h_x, top=swing_h, right=bar_index, bottom=swing_l, border_width=0, bgcolor=color.new(color.gray, 30), text="CHOCH", text_size=size.small, text_valign=text.align_top, text_color=color.black)
+        trend := 1
+        last_choch_price := swing_h
+        last_choch_x := bar_index
+        expect_correction := true
+    else if trend == 1 // Trend continues: BOS
+        line.new(x1=swing_h_x, y1=swing_h, x2=bar_index, y2=swing_h, color=color.black, width=1, style=line.style_solid, extend=extend.none)
+        // Center the text label over the BOS line
+        mid_x = math.round((swing_h_x + bar_index) / 2)
+        label.new(x=mid_x, y=swing_h, text="BOS", style=label.style_none, textcolor=color.black, size=size.small)
+
+if bearish_cross
+    if trend == 1 // Trend changed: CHOCH
+        box.new(left=swing_l_x, top=swing_h, right=bar_index, bottom=swing_l, border_width=0, bgcolor=color.new(color.gray, 30), text="CHOCH", text_size=size.small, text_valign=text.align_top, text_color=color.black)
+        trend := -1
+        last_choch_price := swing_l
+        last_choch_x := bar_index
+        expect_correction := true
+    else if trend == -1 // Trend continues: BOS
+        line.new(x1=swing_l_x, y1=swing_l, x2=bar_index, y2=swing_l, color=color.black, width=1, style=line.style_solid, extend=extend.none)
+        // Center the text label over the BOS line
+        mid_x = math.round((swing_l_x + bar_index) / 2)
+        label.new(x=mid_x, y=swing_l, text="BOS", style=label.style_none, textcolor=color.black, size=size.small)
